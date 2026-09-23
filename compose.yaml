@@ -1,0 +1,108 @@
+services:
+  grafana:
+    image: grafana/grafana:12.4.3-security-02
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_PLUGINS_PREINSTALL_SYNC: grafana-opensearch-datasource@2.34.4
+    volumes:
+      - ./boolean-repro-dashboard.json:/var/lib/grafana/dashboards/boolean-repro-dashboard.json:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mkdir -p /etc/grafana/provisioning/datasources /etc/grafana/provisioning/dashboards
+        printf '%s\n' \
+          'apiVersion: 1' \
+          'datasources:' \
+          '  - name: Boolean Repro OpenSearch' \
+          '    uid: boolean-repro' \
+          '    type: grafana-opensearch-datasource' \
+          '    access: proxy' \
+          '    editable: true' \
+          '    url: http://opensearch:9200/' \
+          '    jsonData:' \
+          '      database: boolean-repro' \
+          '      timeField: "@timestamp"' \
+          '      flavor: opensearch' \
+          '      version: 2.19.0' \
+          '      versionLabel: OpenSearch 2.19.0' \
+          > /etc/grafana/provisioning/datasources/boolean-repro.yaml
+        printf '%s\n' \
+          'apiVersion: 1' \
+          'providers:' \
+          '  - name: boolean-repro' \
+          '    orgId: 1' \
+          '    type: file' \
+          '    disableDeletion: true' \
+          '    allowUiUpdates: true' \
+          '    options:' \
+          '      path: /var/lib/grafana/dashboards' \
+          > /etc/grafana/provisioning/dashboards/boolean-repro.yaml
+        exec /run.sh
+
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.0
+    environment:
+      discovery.type: single-node
+      # 2.19.0 ZstdEncoder fails with its allocator; browser headers reach it via Grafana resources.
+      http.compression: "false"
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health?wait_for_status=yellow >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  seed:
+    image: curlimages/curl:8.12.1
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        status=$$(curl -sS -o /dev/null -w '%{http_code}' http://opensearch:9200/boolean-repro)
+        if [ "$$status" = 404 ]; then
+          curl -fsS -X PUT http://opensearch:9200/boolean-repro \
+            -H 'Content-Type: application/json' \
+            -d '{"mappings":{"properties":{"@timestamp":{"type":"date"},"message":{"type":"keyword"},"build":{"properties":{"problem":{"properties":{"muted":{"type":"boolean"}}}}}}}}'
+        elif [ "$$status" != 200 ]; then
+          echo "Unexpected index status: $$status" >&2
+          exit 1
+        fi
+        for document in \
+          '1 {"@timestamp":"2025-01-01T00:00:00Z","message":"muted-1","build":{"problem":{"muted":true}}}' \
+          '2 {"@timestamp":"2025-01-01T01:00:00Z","message":"muted-2","build":{"problem":{"muted":true}}}' \
+          '3 {"@timestamp":"2025-01-01T02:00:00Z","message":"muted-3","build":{"problem":{"muted":true}}}' \
+          '4 {"@timestamp":"2025-01-01T03:00:00Z","message":"unmuted-1","build":{"problem":{"muted":false}}}' \
+          '5 {"@timestamp":"2025-01-01T04:00:00Z","message":"unmuted-2","build":{"problem":{"muted":false}}}' \
+          '6 {"@timestamp":"2025-01-01T05:00:00Z","message":"unmuted-3","build":{"problem":{"muted":false}}}'; do
+          id=$${document%% *}
+          body=$${document#* }
+          curl -fsS -X PUT "http://opensearch:9200/boolean-repro/_doc/$$id" \
+            -H 'Content-Type: application/json' -d "$$body" >/dev/null
+        done
+        curl -fsS -X POST 'http://opensearch:9200/boolean-repro/_refresh' >/dev/null
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.19.0
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "127.0.0.1:5601:5601"

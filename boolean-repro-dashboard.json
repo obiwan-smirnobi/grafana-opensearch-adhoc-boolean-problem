@@ -1,0 +1,71 @@
+{
+  "uid": "boolean-repro",
+  "title": "OpenSearch Boolean Ad-Hoc Filter Repro",
+  "tags": ["repro", "opensearch", "boolean"],
+  "timezone": "utc",
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "2025-01-01T00:00:00Z", "to": "2025-01-02T00:00:00Z" },
+  "templating": {
+    "list": [
+      {
+        "name": "Filters",
+        "label": "Ad-hoc filters",
+        "type": "adhoc",
+        "datasource": { "type": "grafana-opensearch-datasource", "uid": "boolean-repro" },
+        "filters": [],
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "Reproduction",
+      "gridPos": { "h": 5, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "Select **build.problem.muted = true** or **false** in the ad-hoc filter. Open panel menu -> Inspect -> Query.\n\nExpected query value: `true` or `false`.\n\nBug repro: plugin 2.34.4 submits `1` or `0`, while the dropdown still displays `true` / `false`."
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Matching document count",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 },
+      "datasource": { "type": "grafana-opensearch-datasource", "uid": "boolean-repro" },
+      "options": { "reduceOptions": { "values": false, "calcs": ["sum"], "fields": "" }, "orientation": "auto" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "lucene",
+          "query": "*",
+          "timeField": "@timestamp",
+          "metrics": [{ "id": "1", "type": "count" }],
+          "bucketAggs": [{ "id": "2", "type": "date_histogram", "field": "@timestamp", "settings": { "interval": "1h", "min_doc_count": 0 } }],
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Seeded boolean documents",
+      "gridPos": { "h": 12, "w": 16, "x": 8, "y": 5 },
+      "datasource": { "type": "grafana-opensearch-datasource", "uid": "boolean-repro" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "lucene",
+          "query": "*",
+          "timeField": "@timestamp",
+          "metrics": [{ "id": "1", "type": "raw_document", "settings": { "size": "100", "order": "desc" } }],
+          "bucketAggs": [],
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}
